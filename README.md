@@ -20,6 +20,35 @@ Model Context Protocol (MCP) server for accessing Missive conversations in Claud
 - **Search Messages**: Find messages by email Message-ID
 - **Create Messages**: Send messages through custom channels
 
+### **Analytics Reports**
+- **Create Analytics Report**: Generate analytics reports with date ranges and filters
+- **Get Analytics Report**: Retrieve report results including conversations, messages, response times
+
+### **Drafts & Sending**
+- **Create Draft**: Create drafts or send emails/SMS immediately
+- **Get Drafts**: Retrieve drafts from conversations
+- **Delete Draft**: Delete scheduled drafts
+
+### **Posts (Integration Actions)**
+- **Create Post**: Add posts to conversations with conversation management (close, assign, label)
+- **Get Posts**: Retrieve posts from conversations
+
+### **Contacts Management**
+- **List Contacts**: Search and list contacts with filtering
+- **Get Contact**: Get detailed contact information
+- **Create Contact**: Create new contacts with group memberships
+- **Update Contact**: Update contact details and group memberships
+- **Delete Contact**: Remove contacts
+- **List Contact Books**: Get available contact books
+- **List Contact Groups**: Get groups/organizations in a contact book
+
+### **Organizations & Teams**
+- **List Organizations**: Get organizations you're part of
+- **List Teams**: Get teams with optional organization filter
+
+### **Shared Labels**
+- **List Shared Labels**: Get shared labels for tagging conversations
+
 ### **Security & Integration**
 - **Secure Authentication**: Uses your personal Missive API token
 - **Claude Integration**: Works seamlessly with Claude Desktop
@@ -117,7 +146,7 @@ Add this to your Claude Desktop config file:
 - ✅ **Local processing**: All data stays on your machine
 - ✅ **Environment variables**: Secure token storage
 - ✅ **Direct API calls**: No intermediary services
-- ✅ **Minimal permissions**: Only reads conversations
+- ✅ **Full API access**: Read and write conversations, contacts, drafts, and more
 
 ## 🛠 Troubleshooting
 
@@ -179,6 +208,35 @@ This server implements the following MCP tools:
 ### **User Management Tools**
 - **`get_users`**: List users in organizations with optional filtering and pagination
 
+### **Analytics Tools**
+- **`create_analytics_report`**: Create an analytics report request with organization, date range, and optional filters (teams, users, mailboxes, labels)
+- **`get_analytics_report`**: Retrieve analytics report results by report ID (conversations, messages, response times, resolution times, team/user breakdowns)
+
+### **Drafts Tools**
+- **`create_draft`**: Create a draft or send immediately (email/SMS). Supports scheduling, team assignment, labels, and conversation management
+- **`get_conversation_drafts`**: Get drafts from a specific conversation
+- **`delete_draft`**: Delete a scheduled draft
+
+### **Posts Tools**
+- **`create_post`**: Create a post in a conversation with optional actions (close, reopen, assign, label, move to inbox). Recommended for integrations as posts leave an audit trail
+- **`get_conversation_posts`**: Get posts from a specific conversation
+
+### **Contacts Tools**
+- **`list_contacts`**: List contacts with optional search and contact book filtering
+- **`get_contact`**: Get detailed contact information including memberships
+- **`create_contact`**: Create a new contact with email, phone, notes, and group memberships
+- **`update_contact`**: Update contact details (note: memberships array replaces all existing memberships)
+- **`delete_contact`**: Delete a contact
+- **`list_contact_books`**: List all contact books you have access to
+- **`list_contact_groups`**: List groups or organizations in a contact book
+
+### **Organization & Team Tools**
+- **`list_organizations`**: List organizations you're part of
+- **`list_teams`**: List teams with optional organization filter
+
+### **Shared Labels Tools**
+- **`list_shared_labels`**: List shared labels with optional organization filter
+
 ### **Example Usage with Claude**
 Ask Claude things like:
 - "Show me my flagged conversations"
@@ -189,6 +247,15 @@ Ask Claude things like:
 - "Search for messages with Message-ID <example@domain.com>"
 - "Show me all users in my organization"
 - "List users for organization abc123"
+- "Create an analytics report for organization xyz from 2024-01-01 to 2024-01-31"
+- "Get the analytics report results for report abc123"
+- "Show me team performance analytics for the last month"
+- "Send an email to john@example.com with subject 'Meeting tomorrow'"
+- "Create a post to close conversation abc123 and add a note"
+- "List all my contacts"
+- "Create a contact for Jane Doe with email jane@example.com in the VIPs group"
+- "Show me all teams in my organization"
+- "List shared labels I can use"
 
 ## 🤝 Contributing
 
