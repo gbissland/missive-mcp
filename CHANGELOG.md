@@ -2,6 +2,17 @@
 
 All notable changes to the Missive MCP Server.
 
+## [1.2.0] - 2026-01-30
+
+### Added
+- **`calculate_team_metrics` tool**: Custom analytics for any team inbox
+  - Calculates messages received/sent, first reply times
+  - Breakdown by email channel (which address received/sent)
+  - Configurable via `INTERNAL_DOMAINS` and `TRACKED_CHANNELS` env vars
+  - Works regardless of Missive plan tier (uses conversation/message endpoints)
+  - Supports historical data analysis with date range filtering
+  - Rate-limit aware with built-in delays
+
 ## [1.1.0] - 2026-01-30
 
 ### Fixed

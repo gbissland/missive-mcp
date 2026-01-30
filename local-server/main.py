@@ -2505,6 +2505,335 @@ async def list_shared_labels(organization_id: Optional[str] = None) -> str:
             return f"Error fetching shared labels: {str(e)}"
 
 
+# ============================================================================
+# TEAM METRICS (Custom Analytics)
+# ============================================================================
+
+@mcp.tool
+async def calculate_team_metrics(
+    team_id: str,
+    start_date: str,
+    end_date: str,
+    internal_domains: Optional[str] = None,
+    tracked_channels: Optional[str] = None,
+    max_conversations: int = 500
+) -> str:
+    """Calculate custom metrics for a team inbox by analysing conversations and messages.
+    
+    Useful when native analytics filtering requires a higher plan tier.
+    Fetches conversations from the team inbox and calculates:
+    - Messages received/sent counts
+    - First reply time calculations  
+    - Breakdown by email channel
+    
+    Args:
+        team_id: The team ID to analyse (required)
+        start_date: Start date in YYYY-MM-DD format (required)
+        end_date: End date in YYYY-MM-DD format (required)
+        internal_domains: Comma-separated domains to identify outbound messages 
+                         (default: from INTERNAL_DOMAINS env var, or 'weave.co.nz,weave.digital')
+        tracked_channels: Comma-separated email addresses to group by
+                         (default: from TRACKED_CHANNELS env var, or auto-detect)
+        max_conversations: Maximum conversations to analyse (default: 500, max: 2000)
+    """
+    import asyncio
+    
+    try:
+        api_token = get_api_token()
+    except ValueError as e:
+        return f"Error: {str(e)}"
+    
+    # Parse dates
+    try:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+        start_ts = start_dt.timestamp()
+        end_ts = end_dt.timestamp()
+    except ValueError:
+        return "Error: Dates must be in YYYY-MM-DD format"
+    
+    # Get internal domains (for determining inbound vs outbound)
+    if internal_domains:
+        domains = [d.strip().lower() for d in internal_domains.split(",")]
+    else:
+        env_domains = os.getenv("INTERNAL_DOMAINS", "weave.co.nz,weave.digital")
+        domains = [d.strip().lower() for d in env_domains.split(",")]
+    
+    # Get tracked channels if specified
+    channels_to_track = None
+    if tracked_channels:
+        channels_to_track = [c.strip().lower() for c in tracked_channels.split(",")]
+    elif os.getenv("TRACKED_CHANNELS"):
+        channels_to_track = [c.strip().lower() for c in os.getenv("TRACKED_CHANNELS").split(",")]
+    
+    # Limit max conversations
+    max_conversations = min(max_conversations, 2000)
+    
+    # Helper to check if email is internal
+    def is_internal(email: str) -> bool:
+        if not email:
+            return False
+        email_lower = email.lower()
+        return any(domain in email_lower for domain in domains)
+    
+    # Helper to extract email address
+    def get_email(field: dict) -> str:
+        return (field.get("address") or "").lower() if field else ""
+    
+    # Metrics containers
+    metrics = {
+        "total_conversations": 0,
+        "conversations_with_reply": 0,
+        "total_inbound": 0,
+        "total_outbound": 0,
+        "first_reply_times": [],  # in seconds
+        "channels_inbound": {},   # channel -> count
+        "channels_outbound": {},  # channel -> count
+    }
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Fetch conversations from team inbox
+        conversations = []
+        
+        # We need to fetch from team_all to get all conversations including closed
+        # and filter by date ourselves
+        params = {"team_all": team_id, "limit": 50}
+        
+        progress_msg = f"Fetching conversations from team inbox...\n"
+        
+        while len(conversations) < max_conversations:
+            try:
+                response = await client.get(
+                    "https://public.missiveapp.com/v1/conversations",
+                    headers={"Authorization": f"Bearer {api_token}"},
+                    params=params
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                batch = data.get("conversations", [])
+                if not batch:
+                    break
+                
+                # Filter by date - check last_activity_at
+                for conv in batch:
+                    last_activity = conv.get("last_activity_at", 0)
+                    created_at = conv.get("created_at", 0)
+                    
+                    # Include if activity falls within our date range
+                    if last_activity >= start_ts or created_at >= start_ts:
+                        if created_at <= end_ts:
+                            conversations.append(conv)
+                
+                # Check if we should continue (if oldest conv in batch is still in range)
+                if batch:
+                    oldest_activity = min(c.get("last_activity_at", 0) for c in batch)
+                    if oldest_activity < start_ts:
+                        # We've gone past our start date
+                        break
+                
+                # Pagination - use the last conversation's ID for next batch
+                # Missive uses cursor-based pagination
+                if len(batch) < 50:
+                    break
+                    
+                # Get next page using before parameter
+                last_conv = batch[-1]
+                params["before"] = last_conv.get("last_activity_at")
+                
+                # Small delay to respect rate limits
+                await asyncio.sleep(0.1)
+                
+            except httpx.HTTPStatusError as e:
+                return f"Error fetching conversations: HTTP {e.response.status_code}"
+            except Exception as e:
+                return f"Error fetching conversations: {str(e)}"
+        
+        metrics["total_conversations"] = len(conversations)
+        
+        if not conversations:
+            return f"No conversations found for team {team_id} in date range {start_date} to {end_date}"
+        
+        # Now fetch messages for each conversation and calculate metrics
+        progress_total = len(conversations)
+        
+        for idx, conv in enumerate(conversations):
+            conv_id = conv.get("id")
+            
+            try:
+                # Fetch messages for this conversation
+                msg_response = await client.get(
+                    f"https://public.missiveapp.com/v1/conversations/{conv_id}/messages",
+                    headers={"Authorization": f"Bearer {api_token}"},
+                    params={"limit": 50}  # Get up to 50 messages per conversation
+                )
+                msg_response.raise_for_status()
+                msg_data = msg_response.json()
+                
+                messages = msg_data.get("messages", [])
+                
+                # Filter messages by date range and sort by delivered_at
+                filtered_messages = []
+                for msg in messages:
+                    delivered_at = msg.get("delivered_at", 0)
+                    if start_ts <= delivered_at <= end_ts:
+                        filtered_messages.append(msg)
+                
+                # Sort by delivered time (oldest first)
+                filtered_messages.sort(key=lambda m: m.get("delivered_at", 0))
+                
+                # Process messages
+                first_inbound_time = None
+                first_outbound_time = None
+                
+                for msg in filtered_messages:
+                    from_field = msg.get("from_field", {})
+                    to_fields = msg.get("to_fields", [])
+                    delivered_at = msg.get("delivered_at", 0)
+                    
+                    from_email = get_email(from_field)
+                    
+                    # Determine if inbound or outbound
+                    if is_internal(from_email):
+                        # Outbound message (from internal)
+                        metrics["total_outbound"] += 1
+                        
+                        # Track channel (the from address for outbound)
+                        if from_email:
+                            if channels_to_track is None or from_email in channels_to_track:
+                                metrics["channels_outbound"][from_email] = \
+                                    metrics["channels_outbound"].get(from_email, 0) + 1
+                        
+                        # Track first outbound time for reply time calc
+                        if first_outbound_time is None and first_inbound_time is not None:
+                            first_outbound_time = delivered_at
+                    else:
+                        # Inbound message (from external)
+                        metrics["total_inbound"] += 1
+                        
+                        # Track channel (the to address for inbound - which of our addresses received it)
+                        for to_field in to_fields:
+                            to_email = get_email(to_field)
+                            if is_internal(to_email):
+                                if channels_to_track is None or to_email in channels_to_track:
+                                    metrics["channels_inbound"][to_email] = \
+                                        metrics["channels_inbound"].get(to_email, 0) + 1
+                        
+                        # Track first inbound time
+                        if first_inbound_time is None:
+                            first_inbound_time = delivered_at
+                
+                # Calculate first reply time for this conversation
+                if first_inbound_time and first_outbound_time:
+                    reply_time = first_outbound_time - first_inbound_time
+                    if reply_time > 0:  # Sanity check
+                        metrics["first_reply_times"].append(reply_time)
+                        metrics["conversations_with_reply"] += 1
+                
+                # Rate limit protection - small delay between conversations
+                if idx % 10 == 0:
+                    await asyncio.sleep(0.2)
+                    
+            except httpx.HTTPStatusError as e:
+                # Skip this conversation if we can't fetch messages
+                continue
+            except Exception as e:
+                continue
+    
+    # Calculate averages
+    avg_first_reply = 0
+    if metrics["first_reply_times"]:
+        avg_first_reply = sum(metrics["first_reply_times"]) / len(metrics["first_reply_times"])
+    
+    # Helper to format duration
+    def format_duration(seconds):
+        if not seconds:
+            return "N/A"
+        seconds = int(seconds)
+        if seconds < 60:
+            return f"{seconds}s"
+        elif seconds < 3600:
+            mins = seconds // 60
+            return f"{mins}m"
+        else:
+            hours = seconds // 3600
+            mins = (seconds % 3600) // 60
+            return f"{hours}h {mins}m" if mins else f"{hours}h"
+    
+    # Build result
+    result = f"📊 Team Metrics Report\n\n"
+    result += f"📅 Period: {start_dt.strftime('%d %b %Y')} to {end_dt.strftime('%d %b %Y')}\n"
+    result += f"🏷️  Team ID: {team_id}\n\n"
+    
+    result += "═" * 45 + "\n"
+    result += "📧 OVERALL\n"
+    result += "═" * 45 + "\n"
+    result += f"  Conversations analysed:  {metrics['total_conversations']:,}\n"
+    result += f"  Messages received:       {metrics['total_inbound']:,}\n"
+    result += f"  Messages sent:           {metrics['total_outbound']:,}\n"
+    result += f"  Conversations replied:   {metrics['conversations_with_reply']:,}\n"
+    result += f"  First reply time (avg):  {format_duration(avg_first_reply)}\n\n"
+    
+    # First reply time distribution
+    if metrics["first_reply_times"]:
+        result += "═" * 45 + "\n"
+        result += "⏱️  FIRST REPLY TIME DISTRIBUTION\n"
+        result += "═" * 45 + "\n"
+        
+        times = metrics["first_reply_times"]
+        under_15m = sum(1 for t in times if t < 900)
+        under_1h = sum(1 for t in times if 900 <= t < 3600)
+        under_4h = sum(1 for t in times if 3600 <= t < 14400)
+        under_12h = sum(1 for t in times if 14400 <= t < 43200)
+        under_48h = sum(1 for t in times if 43200 <= t < 172800)
+        over_48h = sum(1 for t in times if t >= 172800)
+        
+        total = len(times)
+        result += f"  Under 15 min:  {under_15m:>5} ({under_15m*100//total}%)\n"
+        result += f"  15min - 1hr:   {under_1h:>5} ({under_1h*100//total}%)\n"
+        result += f"  1hr - 4hr:     {under_4h:>5} ({under_4h*100//total}%)\n"
+        result += f"  4hr - 12hr:    {under_12h:>5} ({under_12h*100//total}%)\n"
+        result += f"  12hr - 48hr:   {under_48h:>5} ({under_48h*100//total}%)\n"
+        result += f"  Over 48hr:     {over_48h:>5} ({over_48h*100//total}%)\n\n"
+    
+    # Inbound by channel
+    if metrics["channels_inbound"]:
+        result += "═" * 45 + "\n"
+        result += "📬 INBOUND BY CHANNEL\n"
+        result += "═" * 45 + "\n"
+        
+        # Sort by count descending
+        sorted_channels = sorted(metrics["channels_inbound"].items(), 
+                                  key=lambda x: x[1], reverse=True)
+        total_inbound = metrics["total_inbound"]
+        
+        for channel, count in sorted_channels:
+            pct = (count * 100 // total_inbound) if total_inbound > 0 else 0
+            result += f"  {channel}: {count:,} ({pct}%)\n"
+        result += "\n"
+    
+    # Outbound by channel
+    if metrics["channels_outbound"]:
+        result += "═" * 45 + "\n"
+        result += "📤 OUTBOUND BY CHANNEL\n"
+        result += "═" * 45 + "\n"
+        
+        sorted_channels = sorted(metrics["channels_outbound"].items(), 
+                                  key=lambda x: x[1], reverse=True)
+        total_outbound = metrics["total_outbound"]
+        
+        for channel, count in sorted_channels:
+            pct = (count * 100 // total_outbound) if total_outbound > 0 else 0
+            result += f"  {channel}: {count:,} ({pct}%)\n"
+        result += "\n"
+    
+    # Note about limitations
+    if len(conversations) >= max_conversations:
+        result += f"⚠️  Note: Limited to {max_conversations} conversations. Use max_conversations parameter for more.\n"
+    
+    return result
+
+
 # Run the server in stdio mode only (for Claude Desktop)
 if __name__ == "__main__":
     mcp.run()

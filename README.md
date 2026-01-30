@@ -49,6 +49,9 @@ Model Context Protocol (MCP) server for accessing Missive conversations in Claud
 ### **Shared Labels**
 - **List Shared Labels**: Get shared labels for tagging conversations
 
+### **Team Metrics (Custom Analytics)**
+- **Calculate Team Metrics**: Generate custom analytics for any team inbox by analysing conversation and message data. Useful when native analytics filtering requires a higher plan tier.
+
 ### **Security & Integration**
 - **Secure Authentication**: Uses your personal Missive API token
 - **Claude Integration**: Works seamlessly with Claude Desktop and Claude Code
@@ -144,6 +147,30 @@ Add this to your Claude Code settings file:
   }
 }
 ```
+
+## ⚙️ Team Metrics Configuration (Optional)
+
+The `calculate_team_metrics` tool can be configured via environment variables for convenience.
+Add these to your `env` section in the Claude Desktop/Code config:
+
+```json
+{
+  "env": {
+    "MISSIVE_API_TOKEN": "YOUR_MISSIVE_API_TOKEN_HERE",
+    "INTERNAL_DOMAINS": "yourdomain.com,yourdomain.co.nz",
+    "TRACKED_CHANNELS": "support@yourdomain.com,sales@yourdomain.com,person@yourdomain.com"
+  }
+}
+```
+
+**Configuration options:**
+- `INTERNAL_DOMAINS`: Comma-separated list of your email domains. Used to determine which messages are inbound (from external) vs outbound (from your team).
+- `TRACKED_CHANNELS`: Comma-separated list of email addresses to track separately. If not set, all internal addresses will be auto-detected and reported.
+
+**Example usage:**
+- "Calculate metrics for team abc123 from 2025-01-01 to 2025-12-31"
+- "Show me support team stats for the last month"
+- "Get metrics for team xyz from 2025-06-01 to 2025-06-30 with max 1000 conversations"
 
 ## 🧪 Testing
 
