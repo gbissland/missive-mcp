@@ -1005,9 +1005,10 @@ async def create_analytics_report(
     organization_id: str,
     start_date: str,
     end_date: str,
+    time_zone: str = "Pacific/Auckland",
     team_ids: Optional[List[str]] = None,
     user_ids: Optional[List[str]] = None,
-    mailbox_ids: Optional[List[str]] = None,
+    account_ids: Optional[List[str]] = None,
     label_ids: Optional[List[str]] = None
 ) -> str:
     """Create an analytics report request in Missive.
@@ -1019,10 +1020,11 @@ async def create_analytics_report(
         organization_id: Organization ID to generate report for (required)
         start_date: Start date in YYYY-MM-DD format (required)
         end_date: End date in YYYY-MM-DD format (required)
+        time_zone: Time zone identifier (default: Pacific/Auckland)
         team_ids: Optional list of team IDs to filter by
         user_ids: Optional list of user IDs to filter by
-        mailbox_ids: Optional list of mailbox IDs to filter by
-        label_ids: Optional list of label IDs to filter by
+        account_ids: Optional list of account IDs to filter by
+        label_ids: Optional list of shared label IDs to filter by
     """
 
     try:
@@ -1030,18 +1032,21 @@ async def create_analytics_report(
     except ValueError as e:
         return f"Error: {str(e)}"
 
-    # Validate date format
+    # Convert date strings to Unix timestamps
     try:
-        datetime.strptime(start_date, "%Y-%m-%d")
-        datetime.strptime(end_date, "%Y-%m-%d")
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        start_ts = int(start_dt.timestamp())
+        end_ts = int(end_dt.timestamp())
     except ValueError:
         return "Error: Dates must be in YYYY-MM-DD format"
 
-    # Build report payload
+    # Build report payload per Missive API spec
     report_data = {
         "organization": organization_id,
-        "start_date": start_date,
-        "end_date": end_date
+        "start": start_ts,
+        "end": end_ts,
+        "time_zone": time_zone
     }
 
     # Add optional filters
@@ -1051,13 +1056,13 @@ async def create_analytics_report(
     if user_ids:
         report_data["users"] = user_ids
 
-    if mailbox_ids:
-        report_data["mailboxes"] = mailbox_ids
+    if account_ids:
+        report_data["accounts"] = account_ids
 
     if label_ids:
-        report_data["labels"] = label_ids
+        report_data["shared_labels"] = label_ids
 
-    payload = {"analytics_reports": report_data}
+    payload = {"reports": report_data}
 
     async with httpx.AsyncClient() as client:
         try:
@@ -1072,29 +1077,27 @@ async def create_analytics_report(
             response.raise_for_status()
             data = response.json()
 
-            report = data.get("analytics_reports", {})
+            report = data.get("reports", {})
 
+            report_id = report.get('id')
+            
             result = f"📊 Analytics Report Created!\n\n"
-            result += f"Report ID: {report.get('id')}\n"
-            result += f"Status: {report.get('status', 'pending')}\n"
-            result += f"Organization: {report.get('organization', organization_id)}\n"
+            result += f"Report ID: {report_id}\n"
+            result += f"Organization: {organization_id}\n"
             result += f"Date Range: {start_date} to {end_date}\n"
+            result += f"Time Zone: {time_zone}\n"
 
             # Show applied filters
             if team_ids:
                 result += f"Teams: {', '.join(team_ids)}\n"
             if user_ids:
                 result += f"Users: {', '.join(user_ids)}\n"
-            if mailbox_ids:
-                result += f"Mailboxes: {', '.join(mailbox_ids)}\n"
+            if account_ids:
+                result += f"Accounts: {', '.join(account_ids)}\n"
             if label_ids:
                 result += f"Labels: {', '.join(label_ids)}\n"
 
-            created_at = report.get("created_at")
-            if created_at:
-                result += f"Created: {format_timestamp(created_at)}\n"
-
-            result += f"\n💡 Use get_analytics_report with report ID '{report.get('id')}' to fetch results."
+            result += f"\n💡 Report is processing. Use get_analytics_report with ID '{report_id}' in ~5 seconds to fetch results."
 
             return result
 
@@ -1105,10 +1108,10 @@ async def create_analytics_report(
                 error_detail = ""
                 try:
                     error_data = e.response.json()
-                    error_detail = f" - {error_data.get('error', '')}"
+                    error_detail = f" - {json.dumps(error_data)}"
                 except:
-                    pass
-                return f"Error: Invalid report parameters{error_detail}. Please check organization_id and date formats."
+                    error_detail = f" - {e.response.text}"
+                return f"Error: Invalid report parameters{error_detail}\n\nPayload sent: {json.dumps(payload, indent=2)}"
             elif e.response.status_code == 404:
                 return f"Error: Organization {organization_id} not found or analytics not available."
             else:
@@ -1142,138 +1145,140 @@ async def get_analytics_report(report_id: str) -> str:
             response.raise_for_status()
             data = response.json()
 
-            report = data.get("analytics_reports", {})
+            report = data.get("reports", {})
             if not report:
-                return f"Analytics report {report_id} not found"
+                return f"Analytics report {report_id} not found or still processing. Try again in a few seconds."
 
-            status = report.get("status", "unknown")
-
-            result = f"📊 Analytics Report Results:\n\n"
-            result += f"Report ID: {report.get('id')}\n"
-            result += f"Status: {status}\n"
-
-            # If still processing, let user know
-            if status in ["pending", "processing"]:
-                result += f"\n⏳ Report is still being processed. Please try again in a moment.\n"
-                return result
+            result = f"📊 Analytics Report Results\n\n"
 
             # Date range
-            start_date = report.get("start_date")
-            end_date = report.get("end_date")
-            if start_date and end_date:
-                result += f"Date Range: {start_date} to {end_date}\n"
+            start_ts = report.get("start")
+            end_ts = report.get("end")
+            if start_ts and end_ts:
+                start_date = datetime.fromtimestamp(start_ts).strftime("%d %b %Y")
+                end_date = datetime.fromtimestamp(end_ts).strftime("%d %b %Y")
+                result += f"📅 Period: {start_date} to {end_date}\n"
+                result += f"🌏 Timezone: {report.get('time_zone', 'UTC')}\n\n"
 
-            # Organization
-            org = report.get("organization")
-            if org:
-                if isinstance(org, dict):
-                    result += f"Organization: {org.get('name', org.get('id', 'Unknown'))}\n"
+            # Helper function to format seconds to human readable
+            def format_duration(seconds):
+                if not seconds:
+                    return "N/A"
+                seconds = int(seconds)
+                if seconds < 60:
+                    return f"{seconds}s"
+                elif seconds < 3600:
+                    mins = seconds // 60
+                    secs = seconds % 60
+                    return f"{mins}m {secs}s" if secs else f"{mins}m"
                 else:
-                    result += f"Organization: {org}\n"
+                    hours = seconds // 3600
+                    mins = (seconds % 3600) // 60
+                    return f"{hours}h {mins}m" if mins else f"{hours}h"
 
-            result += "\n"
+            # Get selected period metrics
+            selected = report.get("selected_period", {})
+            previous = report.get("previous_period", {})
+            
+            if selected:
+                global_data = selected.get("global", {})
+                totals = global_data.get("totals", {})
+                metrics = totals.get("metrics", {})
+                
+                if metrics:
+                    # Messages section
+                    result += "═" * 40 + "\n"
+                    result += "📧 MESSAGES\n"
+                    result += "═" * 40 + "\n"
+                    
+                    inbound = metrics.get("inbound_count", {}).get("v", 0)
+                    outbound = metrics.get("outbound_count", {}).get("v", 0)
+                    first_inbound = metrics.get("first_inbound_count", {}).get("v", 0)
+                    reply_count = metrics.get("reply_count", {}).get("v", 0)
+                    first_reply = metrics.get("first_reply_count", {}).get("v", 0)
+                    
+                    result += f"  Messages received:     {inbound:,}\n"
+                    result += f"  Messages sent:         {outbound:,}\n"
+                    result += f"  New conversations:     {first_inbound:,}\n"
+                    result += f"  Conversations replied: {first_reply:,}\n"
+                    result += f"  Total replies:         {reply_count:,}\n\n"
+                    
+                    # Response times section
+                    result += "═" * 40 + "\n"
+                    result += "⏱️  RESPONSE TIMES\n"
+                    result += "═" * 40 + "\n"
+                    
+                    first_reply_avg = metrics.get("first_reply_time_avg", {}).get("v", 0)
+                    reply_avg = metrics.get("reply_time_avg", {}).get("v", 0)
+                    handle_avg = metrics.get("handle_time_avg", {}).get("v", 0)
+                    
+                    result += f"  First reply time (avg): {format_duration(first_reply_avg)}\n"
+                    result += f"  Reply time (avg):       {format_duration(reply_avg)}\n"
+                    result += f"  Handle time (avg):      {format_duration(handle_avg)}\n\n"
+                    
+                    # First reply time distribution
+                    tallies = totals.get("tallies", {})
+                    first_reply_dist = tallies.get("first_reply_time_counts", [])
+                    
+                    if first_reply_dist:
+                        result += "═" * 40 + "\n"
+                        result += "📊 FIRST REPLY TIME DISTRIBUTION\n"
+                        result += "═" * 40 + "\n"
+                        
+                        # Group into meaningful buckets
+                        under_15m = sum(item.get("v", 0) for item in first_reply_dist if item.get("d") in ["1m", "2m", "3m", "4m", "5m", "10m", "15m"])
+                        under_1h = sum(item.get("v", 0) for item in first_reply_dist if item.get("d") in ["30m", "45m", "1h"])
+                        under_4h = sum(item.get("v", 0) for item in first_reply_dist if item.get("d") in ["2h", "3h", "4h"])
+                        under_12h = sum(item.get("v", 0) for item in first_reply_dist if item.get("d") in ["6h", "8h", "10h", "12h"])
+                        under_48h = sum(item.get("v", 0) for item in first_reply_dist if item.get("d") in ["24h", "48h"])
+                        over_48h = sum(item.get("v", 0) for item in first_reply_dist if item.get("d") in ["72h", "72h_plus"])
+                        
+                        total_replies = under_15m + under_1h + under_4h + under_12h + under_48h + over_48h
+                        
+                        if total_replies > 0:
+                            result += f"  Under 15 min:  {under_15m:>5} ({under_15m*100//total_replies}%)\n"
+                            result += f"  15min - 1hr:   {under_1h:>5} ({under_1h*100//total_replies}%)\n"
+                            result += f"  1hr - 4hr:     {under_4h:>5} ({under_4h*100//total_replies}%)\n"
+                            result += f"  4hr - 12hr:    {under_12h:>5} ({under_12h*100//total_replies}%)\n"
+                            result += f"  12hr - 48hr:   {under_48h:>5} ({under_48h*100//total_replies}%)\n"
+                            result += f"  Over 48hr:     {over_48h:>5} ({over_48h*100//total_replies}%)\n"
+                        result += "\n"
 
-            # Conversations metrics
-            conversations = report.get("conversations", {})
-            if conversations:
-                result += "📧 Conversations:\n"
-                result += f"  Total: {conversations.get('total', 0)}\n"
-                result += f"  New: {conversations.get('new', 0)}\n"
-                result += f"  Closed: {conversations.get('closed', 0)}\n"
-                result += f"  Reopened: {conversations.get('reopened', 0)}\n"
-                result += "\n"
-
-            # Messages metrics
-            messages = report.get("messages", {})
-            if messages:
-                result += "💬 Messages:\n"
-                result += f"  Total: {messages.get('total', 0)}\n"
-                result += f"  Inbound: {messages.get('inbound', 0)}\n"
-                result += f"  Outbound: {messages.get('outbound', 0)}\n"
-                result += "\n"
-
-            # Response time metrics
-            response_time = report.get("response_time", {})
-            if response_time:
-                result += "⏱️ Response Time:\n"
-                avg_seconds = response_time.get("average_seconds", 0)
-                if avg_seconds:
-                    hours = avg_seconds // 3600
-                    minutes = (avg_seconds % 3600) // 60
-                    if hours > 0:
-                        result += f"  Average: {hours}h {minutes}m\n"
-                    else:
-                        result += f"  Average: {minutes}m\n"
-                median_seconds = response_time.get("median_seconds", 0)
-                if median_seconds:
-                    hours = median_seconds // 3600
-                    minutes = (median_seconds % 3600) // 60
-                    if hours > 0:
-                        result += f"  Median: {hours}h {minutes}m\n"
-                    else:
-                        result += f"  Median: {minutes}m\n"
-                result += "\n"
-
-            # Resolution time metrics
-            resolution_time = report.get("resolution_time", {})
-            if resolution_time:
-                result += "✅ Resolution Time:\n"
-                avg_seconds = resolution_time.get("average_seconds", 0)
-                if avg_seconds:
-                    hours = avg_seconds // 3600
-                    minutes = (avg_seconds % 3600) // 60
-                    if hours > 0:
-                        result += f"  Average: {hours}h {minutes}m\n"
-                    else:
-                        result += f"  Average: {minutes}m\n"
-                result += "\n"
-
-            # Team breakdown if available
-            teams_data = report.get("teams", [])
-            if teams_data:
-                result += "👥 Team Breakdown:\n"
-                for team in teams_data:
-                    team_name = team.get("name", team.get("id", "Unknown"))
-                    result += f"  {team_name}:\n"
-                    result += f"    Conversations: {team.get('conversations', 0)}\n"
-                    result += f"    Messages: {team.get('messages', 0)}\n"
-                result += "\n"
-
-            # User breakdown if available
-            users_data = report.get("users", [])
-            if users_data:
-                result += "👤 User Breakdown:\n"
-                for user in users_data[:10]:  # Limit to top 10
-                    user_name = user.get("name", user.get("email", "Unknown"))
-                    result += f"  {user_name}:\n"
-                    result += f"    Conversations: {user.get('conversations', 0)}\n"
-                    result += f"    Messages sent: {user.get('messages_sent', 0)}\n"
-                if len(users_data) > 10:
-                    result += f"  ... and {len(users_data) - 10} more users\n"
-                result += "\n"
-
-            # Labels breakdown if available
-            labels_data = report.get("labels", [])
-            if labels_data:
-                result += "🏷️ Labels Breakdown:\n"
-                for label in labels_data[:10]:  # Limit to top 10
-                    label_name = label.get("name", "Unknown")
-                    result += f"  {label_name}: {label.get('count', 0)} conversations\n"
-                if len(labels_data) > 10:
-                    result += f"  ... and {len(labels_data) - 10} more labels\n"
-                result += "\n"
-
-            # If no specific metrics found, show raw data summary
-            if not any([conversations, messages, response_time, resolution_time, teams_data, users_data]):
-                result += "Raw data available in report:\n"
-                for key, value in report.items():
-                    if key not in ["id", "status", "start_date", "end_date", "organization", "created_at"]:
-                        if isinstance(value, (int, float)):
-                            result += f"  {key}: {value}\n"
-                        elif isinstance(value, list):
-                            result += f"  {key}: {len(value)} items\n"
-                        elif isinstance(value, dict):
-                            result += f"  {key}: {len(value)} fields\n"
+            # Compare with previous period if available
+            if previous:
+                prev_global = previous.get("global", {})
+                prev_totals = prev_global.get("totals", {})
+                prev_metrics = prev_totals.get("metrics", {})
+                
+                if prev_metrics and metrics:
+                    result += "═" * 40 + "\n"
+                    result += "📈 VS PREVIOUS PERIOD\n"
+                    result += "═" * 40 + "\n"
+                    
+                    curr_inbound = metrics.get("inbound_count", {}).get("v", 0)
+                    prev_inbound = prev_metrics.get("inbound_count", {}).get("v", 0)
+                    
+                    curr_outbound = metrics.get("outbound_count", {}).get("v", 0)
+                    prev_outbound = prev_metrics.get("outbound_count", {}).get("v", 0)
+                    
+                    curr_first_reply = metrics.get("first_reply_time_avg", {}).get("v", 0)
+                    prev_first_reply = prev_metrics.get("first_reply_time_avg", {}).get("v", 0)
+                    
+                    def format_change(curr, prev, reverse=False):
+                        if prev == 0:
+                            return "N/A"
+                        change = ((curr - prev) / prev) * 100
+                        arrow = "↓" if change < 0 else "↑"
+                        # For times, down is good
+                        if reverse:
+                            colour = "better" if change < 0 else "worse"
+                        else:
+                            colour = "worse" if change < 0 else "better"
+                        return f"{arrow} {abs(change):.1f}%"
+                    
+                    result += f"  Messages received: {format_change(curr_inbound, prev_inbound)} ({prev_inbound:,} → {curr_inbound:,})\n"
+                    result += f"  Messages sent:     {format_change(curr_outbound, prev_outbound)} ({prev_outbound:,} → {curr_outbound:,})\n"
+                    result += f"  First reply time:  {format_change(curr_first_reply, prev_first_reply, True)} ({format_duration(prev_first_reply)} → {format_duration(curr_first_reply)})\n"
 
             return result
 
