@@ -1,6 +1,6 @@
 # Missive MCP Server
 
-Model Context Protocol (MCP) server for accessing Missive conversations in Claude Desktop.
+Model Context Protocol (MCP) server for accessing Missive conversations in Claude Desktop and Claude Code.
 
 ## 🎯 What This Provides
 
@@ -51,7 +51,7 @@ Model Context Protocol (MCP) server for accessing Missive conversations in Claud
 
 ### **Security & Integration**
 - **Secure Authentication**: Uses your personal Missive API token
-- **Claude Integration**: Works seamlessly with Claude Desktop
+- **Claude Integration**: Works seamlessly with Claude Desktop and Claude Code
 - **Local Execution**: Runs entirely on your machine for privacy and security
 
 ## 📁 Project Structure
@@ -120,10 +120,30 @@ Add this to your Claude Desktop config file:
 }
 ```
 
-**Important**: 
+**Important**:
 - Replace `/path/to/missive-mcp/` with the actual path to this project
 - Replace `YOUR_MISSIVE_API_TOKEN_HERE` with your actual Missive API token
 - On Windows, use `.venv\Scripts\python.exe` instead of `.venv/bin/python`
+
+## ⚙️ Claude Code Configuration
+
+Add this to your Claude Code settings file:
+
+**macOS/Linux**: `~/.claude/settings.json`
+
+```json
+{
+  "mcpServers": {
+    "missive": {
+      "command": "/path/to/missive-mcp/local-server/.venv/bin/python",
+      "args": ["/path/to/missive-mcp/local-server/main.py"],
+      "env": {
+        "MISSIVE_API_TOKEN": "YOUR_MISSIVE_API_TOKEN_HERE"
+      }
+    }
+  }
+}
+```
 
 ## 🧪 Testing
 
