@@ -2516,7 +2516,7 @@ async def calculate_team_metrics(
     end_date: str,
     internal_domains: Optional[str] = None,
     tracked_channels: Optional[str] = None,
-    max_conversations: int = 500
+    max_conversations: int = 200
 ) -> str:
     """Calculate custom metrics for a team inbox by analysing conversations and messages.
     
@@ -2534,7 +2534,7 @@ async def calculate_team_metrics(
                          (default: from INTERNAL_DOMAINS env var, or 'weave.co.nz,weave.digital')
         tracked_channels: Comma-separated email addresses to group by
                          (default: from TRACKED_CHANNELS env var, or auto-detect)
-        max_conversations: Maximum conversations to analyse (default: 500, max: 2000)
+        max_conversations: Maximum conversations to analyse (default: 200, max: 2000)
     """
     import asyncio
     
@@ -2591,15 +2591,13 @@ async def calculate_team_metrics(
         "channels_outbound": {},  # channel -> count
     }
     
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=120.0) as client:
         # Fetch conversations from team inbox
         conversations = []
         
         # We need to fetch from team_all to get all conversations including closed
         # and filter by date ourselves
         params = {"team_all": team_id, "limit": 50}
-        
-        progress_msg = f"Fetching conversations from team inbox...\n"
         
         while len(conversations) < max_conversations:
             try:
@@ -2637,12 +2635,12 @@ async def calculate_team_metrics(
                 if len(batch) < 50:
                     break
                     
-                # Get next page using before parameter
+                # Get next page using 'until' parameter (Missive pagination)
                 last_conv = batch[-1]
-                params["before"] = last_conv.get("last_activity_at")
+                params["until"] = last_conv.get("last_activity_at")
                 
-                # Small delay to respect rate limits
-                await asyncio.sleep(0.1)
+                # Rate limit: 2 requests per second (within 5/sec burst limit)
+                await asyncio.sleep(0.5)
                 
             except httpx.HTTPStatusError as e:
                 return f"Error fetching conversations: HTTP {e.response.status_code}"
@@ -2665,7 +2663,7 @@ async def calculate_team_metrics(
                 msg_response = await client.get(
                     f"https://public.missiveapp.com/v1/conversations/{conv_id}/messages",
                     headers={"Authorization": f"Bearer {api_token}"},
-                    params={"limit": 50}  # Get up to 50 messages per conversation
+                    params={"limit": 10}  # Missive API max is 10
                 )
                 msg_response.raise_for_status()
                 msg_data = msg_response.json()
@@ -2730,14 +2728,13 @@ async def calculate_team_metrics(
                         metrics["first_reply_times"].append(reply_time)
                         metrics["conversations_with_reply"] += 1
                 
-                # Rate limit protection - small delay between conversations
-                if idx % 10 == 0:
-                    await asyncio.sleep(0.2)
+                # Rate limit: 2 requests per second (within 5/sec burst limit)
+                await asyncio.sleep(0.5)
                     
-            except httpx.HTTPStatusError as e:
+            except httpx.HTTPStatusError:
                 # Skip this conversation if we can't fetch messages
                 continue
-            except Exception as e:
+            except Exception:
                 continue
     
     # Calculate averages
@@ -2829,7 +2826,7 @@ async def calculate_team_metrics(
     
     # Note about limitations
     if len(conversations) >= max_conversations:
-        result += f"⚠️  Note: Limited to {max_conversations} conversations. Use max_conversations parameter for more.\n"
+        result += f"\n⚠️  Note: Limited to {max_conversations} conversations. Use max_conversations parameter for more.\n"
     
     return result
 
