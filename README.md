@@ -41,6 +41,11 @@ Model Context Protocol (MCP) server for accessing Missive conversations in Claud
 - **Delete Contact**: Remove contacts
 - **List Contact Books**: Get available contact books
 - **List Contact Groups**: Get groups/organizations in a contact book
+- **Get Contacts by Group**: Find all contacts belonging to a specific group
+- **Add Contact to Group**: Add a contact to an existing group
+- **Remove Contact from Group**: Remove a contact from a group
+
+> **Note**: Contact groups must be created in the Missive UI first. The API supports adding/removing contacts from existing groups, but cannot create new groups.
 
 ### **Organizations & Teams**
 - **List Organizations**: Get organizations you're part of
@@ -276,6 +281,9 @@ This server implements the following MCP tools:
 - **`delete_contact`**: Delete a contact
 - **`list_contact_books`**: List all contact books you have access to
 - **`list_contact_groups`**: List groups or organizations in a contact book
+- **`get_contacts_by_group`**: Get all contacts belonging to a specific group
+- **`add_contact_to_group`**: Add a contact to an existing group (preserves other memberships)
+- **`remove_contact_from_group`**: Remove a contact from a group (preserves other memberships)
 
 ### **Organization & Team Tools**
 - **`list_organizations`**: List organizations you're part of
@@ -301,6 +309,9 @@ Ask Claude things like:
 - "Create a post to close conversation abc123 and add a note"
 - "List all my contacts"
 - "Create a contact for Jane Doe with email jane@example.com in the VIPs group"
+- "Show me all contacts in the VIPs group"
+- "Add contact abc123 to the Priority Clients group"
+- "Remove John Smith from the Newsletter group"
 - "Show me all teams in my organization"
 - "List shared labels I can use"
 

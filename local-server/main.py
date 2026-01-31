@@ -1888,7 +1888,13 @@ async def get_contact(contact_id: str) -> str:
             response.raise_for_status()
             data = response.json()
 
-            contact = data.get("contacts", {})
+            # Handle both object and array responses from the API
+            contacts_data = data.get("contacts", {})
+            if isinstance(contacts_data, list):
+                contact = contacts_data[0] if contacts_data else {}
+            else:
+                contact = contacts_data
+
             if not contact:
                 return f"Contact {contact_id} not found"
 
@@ -2030,7 +2036,12 @@ async def create_contact(
             response.raise_for_status()
             data = response.json()
 
-            contact = data.get("contacts", {})
+            # Handle both object and array responses from the API
+            contacts_data = data.get("contacts", {})
+            if isinstance(contacts_data, list):
+                contact = contacts_data[0] if contacts_data else {}
+            else:
+                contact = contacts_data
 
             name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
             if not name:
@@ -2131,7 +2142,9 @@ async def update_contact(
     if not contact_data:
         return "Error: At least one field must be provided to update"
 
-    payload = {"contacts": contact_data}
+    # API expects contacts as an array with id included
+    contact_data["id"] = contact_id
+    payload = {"contacts": [contact_data]}
 
     async with httpx.AsyncClient() as client:
         try:
@@ -2146,7 +2159,12 @@ async def update_contact(
             response.raise_for_status()
             data = response.json()
 
-            contact = data.get("contacts", {})
+            # Handle both object and array responses from the API
+            contacts_data = data.get("contacts", {})
+            if isinstance(contacts_data, list):
+                contact = contacts_data[0] if contacts_data else {}
+            else:
+                contact = contacts_data
 
             name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
             if not name:
@@ -2288,24 +2306,23 @@ async def list_contact_groups(
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(
-                f"https://public.missiveapp.com/v1/contact_books/{contact_book_id}/groups",
+                "https://public.missiveapp.com/v1/contact_groups",
                 headers={"Authorization": f"Bearer {api_token}"},
-                params={"kind": kind}
+                params={"contact_book": contact_book_id, "kind": kind}
             )
             response.raise_for_status()
             data = response.json()
 
-            groups = data.get("groups", [])
-            if not groups:
+            contact_groups = data.get("contact_groups", [])
+            if not contact_groups:
                 return f"No {kind}s found in contact book {contact_book_id}"
 
             emoji = "🏢" if kind == "organization" else "🏷️"
-            result = f"{emoji} {kind.title()}s ({len(groups)} found):\n\n"
+            result = f"{emoji} {kind.title()}s ({len(contact_groups)} found):\n\n"
 
-            for i, group in enumerate(groups, 1):
+            for i, group in enumerate(contact_groups, 1):
                 result += f"{i}. {group.get('name', 'Unnamed')}\n"
-                result += f"   ID: {group.get('id')}\n"
-                result += f"   Kind: {group.get('kind', kind)}\n\n"
+                result += f"   ID: {group.get('id')}\n\n"
 
             return result
 
@@ -2318,6 +2335,370 @@ async def list_contact_groups(
                 return f"Error fetching groups: HTTP {e.response.status_code}"
         except Exception as e:
             return f"Error fetching groups: {str(e)}"
+
+
+@mcp.tool
+async def get_contacts_by_group(
+    contact_book_id: str,
+    group_name: str,
+    limit: int = 200
+) -> str:
+    """Get contacts that belong to a specific group.
+
+    Note: The Missive API doesn't support filtering by group directly,
+    so this fetches contacts from the book and filters by group membership.
+
+    Args:
+        contact_book_id: The contact book ID (required)
+        group_name: The name of the group to filter by (required)
+        limit: Maximum contacts to scan (max 200)
+    """
+
+    try:
+        api_token = get_api_token()
+    except ValueError as e:
+        return f"Error: {str(e)}"
+
+    params = {
+        "contact_book": contact_book_id,
+        "limit": min(limit, 200)
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(
+                "https://public.missiveapp.com/v1/contacts",
+                headers={"Authorization": f"Bearer {api_token}"},
+                params=params
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            contacts = data.get("contacts", [])
+            if not contacts:
+                return f"No contacts found in contact book {contact_book_id}"
+
+            # Filter contacts by group membership
+            matching_contacts = []
+            for contact in contacts:
+                memberships = contact.get("memberships", [])
+                for m in memberships:
+                    group = m.get("group", {})
+                    if group.get("name", "").lower() == group_name.lower():
+                        matching_contacts.append(contact)
+                        break
+
+            if not matching_contacts:
+                return f"No contacts found in group '{group_name}'"
+
+            result = f"👤 Contacts in group '{group_name}' ({len(matching_contacts)} found):\n\n"
+
+            for i, contact in enumerate(matching_contacts, 1):
+                name = f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip()
+                if not name:
+                    name = "Unknown"
+
+                result += f"{i}. {name}\n"
+
+                # Email addresses
+                infos = contact.get("infos", [])
+                emails = [info.get("value") for info in infos if info.get("kind") == "email"]
+                if emails:
+                    result += f"   Email: {', '.join(emails[:2])}\n"
+
+                # Phone numbers
+                phones = [info.get("value") for info in infos if info.get("kind") == "phone"]
+                if phones:
+                    result += f"   Phone: {', '.join(phones[:2])}\n"
+
+                result += f"   ID: {contact.get('id')}\n\n"
+
+            return result
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                return "Error: Invalid Missive API token."
+            else:
+                return f"Error fetching contacts: HTTP {e.response.status_code}"
+        except Exception as e:
+            return f"Error fetching contacts: {str(e)}"
+
+
+@mcp.tool
+async def add_contact_to_group(
+    contact_id: str,
+    group_name: str,
+    group_kind: str = "group"
+) -> str:
+    """Add a contact to a group (preserving existing memberships).
+
+    Args:
+        contact_id: The ID of the contact to update (required)
+        group_name: The name of the group to add (required)
+        group_kind: Type of group - 'group' or 'organization' (default: 'group')
+    """
+
+    try:
+        api_token = get_api_token()
+    except ValueError as e:
+        return f"Error: {str(e)}"
+
+    if group_kind not in ["group", "organization"]:
+        return "Error: group_kind must be 'group' or 'organization'"
+
+    async with httpx.AsyncClient() as client:
+        try:
+            # First, fetch the current contact to get existing memberships
+            response = await client.get(
+                f"https://public.missiveapp.com/v1/contacts/{contact_id}",
+                headers={"Authorization": f"Bearer {api_token}"}
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Handle both object and array responses from the API
+            contacts_data = data.get("contacts", {})
+            if isinstance(contacts_data, list):
+                contact = contacts_data[0] if contacts_data else {}
+            else:
+                contact = contacts_data
+
+            if not contact:
+                return f"Error: Contact {contact_id} not found"
+
+            # Get existing memberships and contact book
+            existing_memberships = contact.get("memberships", [])
+            contact_book_id = contact.get("contact_book")
+
+            # Check if already in this group
+            for m in existing_memberships:
+                group = m.get("group", {})
+                if group.get("name", "").lower() == group_name.lower() and group.get("kind") == group_kind:
+                    return f"Contact is already in {group_kind} '{group_name}'"
+
+            # Look up the target group ID from the contact_groups endpoint
+            target_group_id = None
+            if contact_book_id:
+                groups_response = await client.get(
+                    "https://public.missiveapp.com/v1/contact_groups",
+                    headers={"Authorization": f"Bearer {api_token}"},
+                    params={"contact_book": contact_book_id, "kind": group_kind}
+                )
+                if groups_response.status_code == 200:
+                    groups_data = groups_response.json()
+                    for g in groups_data.get("contact_groups", []):
+                        if g.get("name", "").lower() == group_name.lower():
+                            target_group_id = g.get("id")
+                            break
+
+            if not target_group_id:
+                return f"Error: Group '{group_name}' not found in the contact book. Please create the group in Missive first."
+
+            # Build new memberships list (preserve existing + add new)
+            # Use documented format: kind + name
+            new_memberships = []
+            for m in existing_memberships:
+                group = m.get("group", {})
+                membership_entry = {
+                    "group": {
+                        "kind": group.get("kind", "group"),
+                        "name": group.get("name", "")
+                    }
+                }
+                # Preserve title/location for organizations
+                if m.get("title"):
+                    membership_entry["title"] = m.get("title")
+                if m.get("location"):
+                    membership_entry["location"] = m.get("location")
+                new_memberships.append(membership_entry)
+
+            # Add the new group using documented format (kind + name)
+            new_memberships.append({
+                "group": {
+                    "kind": group_kind,
+                    "name": group_name
+                }
+            })
+
+            # Update the contact - API expects contacts as an array with id
+            payload = {
+                "contacts": [{
+                    "id": contact_id,
+                    "memberships": new_memberships
+                }]
+            }
+
+            response = await client.patch(
+                f"https://public.missiveapp.com/v1/contacts/{contact_id}",
+                headers={
+                    "Authorization": f"Bearer {api_token}",
+                    "Content-Type": "application/json"
+                },
+                json=payload
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Handle both object and array responses from the API
+            contacts_data = data.get("contacts", {})
+            if isinstance(contacts_data, list):
+                updated_contact = contacts_data[0] if contacts_data else {}
+            else:
+                updated_contact = contacts_data
+
+            name = f"{updated_contact.get('first_name', '')} {updated_contact.get('last_name', '')}".strip()
+            if not name:
+                name = "Contact"
+
+            # List all current groups
+            memberships = updated_contact.get("memberships", [])
+            groups = [m.get("group", {}).get("name") for m in memberships if m.get("group", {}).get("kind") == "group"]
+            orgs = [m.get("group", {}).get("name") for m in memberships if m.get("group", {}).get("kind") == "organization"]
+
+            result = f"✅ Added {name} to {group_kind} '{group_name}'\n\n"
+            result += f"Contact ID: {contact_id}\n"
+            if groups:
+                result += f"Groups: {', '.join(groups)}\n"
+            if orgs:
+                result += f"Organizations: {', '.join(orgs)}\n"
+
+            return result
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                return "Error: Invalid Missive API token."
+            elif e.response.status_code == 404:
+                return f"Error: Contact {contact_id} not found"
+            else:
+                return f"Error updating contact: HTTP {e.response.status_code}"
+        except Exception as e:
+            return f"Error updating contact: {str(e)}"
+
+
+@mcp.tool
+async def remove_contact_from_group(
+    contact_id: str,
+    group_name: str
+) -> str:
+    """Remove a contact from a group (preserving other memberships).
+
+    Args:
+        contact_id: The ID of the contact to update (required)
+        group_name: The name of the group to remove (required)
+    """
+
+    try:
+        api_token = get_api_token()
+    except ValueError as e:
+        return f"Error: {str(e)}"
+
+    async with httpx.AsyncClient() as client:
+        try:
+            # First, fetch the current contact to get existing memberships
+            response = await client.get(
+                f"https://public.missiveapp.com/v1/contacts/{contact_id}",
+                headers={"Authorization": f"Bearer {api_token}"}
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Handle both object and array responses from the API
+            contacts_data = data.get("contacts", {})
+            if isinstance(contacts_data, list):
+                contact = contacts_data[0] if contacts_data else {}
+            else:
+                contact = contacts_data
+
+            if not contact:
+                return f"Error: Contact {contact_id} not found"
+
+            # Get existing memberships
+            existing_memberships = contact.get("memberships", [])
+
+            # Check if in this group
+            found = False
+            for m in existing_memberships:
+                group = m.get("group", {})
+                if group.get("name", "").lower() == group_name.lower():
+                    found = True
+                    break
+
+            if not found:
+                return f"Contact is not in group '{group_name}'"
+
+            # Build new memberships list (exclude the target group)
+            new_memberships = []
+            for m in existing_memberships:
+                group = m.get("group", {})
+                if group.get("name", "").lower() != group_name.lower():
+                    membership_entry = {
+                        "group": {
+                            "kind": group.get("kind", "group"),
+                            "name": group.get("name", "")
+                        }
+                    }
+                    # Preserve title/location for organizations
+                    if m.get("title"):
+                        membership_entry["title"] = m.get("title")
+                    if m.get("location"):
+                        membership_entry["location"] = m.get("location")
+                    new_memberships.append(membership_entry)
+
+            # Update the contact - API expects contacts as an array with id
+            payload = {
+                "contacts": [{
+                    "id": contact_id,
+                    "memberships": new_memberships
+                }]
+            }
+
+            response = await client.patch(
+                f"https://public.missiveapp.com/v1/contacts/{contact_id}",
+                headers={
+                    "Authorization": f"Bearer {api_token}",
+                    "Content-Type": "application/json"
+                },
+                json=payload
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Handle both object and array responses from the API
+            contacts_data = data.get("contacts", {})
+            if isinstance(contacts_data, list):
+                updated_contact = contacts_data[0] if contacts_data else {}
+            else:
+                updated_contact = contacts_data
+
+            name = f"{updated_contact.get('first_name', '')} {updated_contact.get('last_name', '')}".strip()
+            if not name:
+                name = "Contact"
+
+            # List remaining groups
+            memberships = updated_contact.get("memberships", [])
+            groups = [m.get("group", {}).get("name") for m in memberships if m.get("group", {}).get("kind") == "group"]
+            orgs = [m.get("group", {}).get("name") for m in memberships if m.get("group", {}).get("kind") == "organization"]
+
+            result = f"✅ Removed {name} from group '{group_name}'\n\n"
+            result += f"Contact ID: {contact_id}\n"
+            if groups:
+                result += f"Remaining groups: {', '.join(groups)}\n"
+            elif orgs:
+                result += f"Organizations: {', '.join(orgs)}\n"
+            else:
+                result += "No remaining group memberships\n"
+
+            return result
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                return "Error: Invalid Missive API token."
+            elif e.response.status_code == 404:
+                return f"Error: Contact {contact_id} not found"
+            else:
+                return f"Error updating contact: HTTP {e.response.status_code}"
+        except Exception as e:
+            return f"Error updating contact: {str(e)}"
 
 
 # ============================================================================
@@ -2530,8 +2911,8 @@ async def calculate_team_metrics(
         team_id: The team ID to analyse (required)
         start_date: Start date in YYYY-MM-DD format (required)
         end_date: End date in YYYY-MM-DD format (required)
-        internal_domains: Comma-separated domains to identify outbound messages 
-                         (default: from INTERNAL_DOMAINS env var, or 'weave.co.nz,weave.digital')
+        internal_domains: Comma-separated domains to identify outbound messages
+                         (default: from INTERNAL_DOMAINS env var, or 'example.com')
         tracked_channels: Comma-separated email addresses to group by
                          (default: from TRACKED_CHANNELS env var, or auto-detect)
         max_conversations: Maximum conversations to analyse (default: 200, max: 2000)
@@ -2556,7 +2937,7 @@ async def calculate_team_metrics(
     if internal_domains:
         domains = [d.strip().lower() for d in internal_domains.split(",")]
     else:
-        env_domains = os.getenv("INTERNAL_DOMAINS", "weave.co.nz,weave.digital")
+        env_domains = os.getenv("INTERNAL_DOMAINS", "example.com")
         domains = [d.strip().lower() for d in env_domains.split(",")]
     
     # Get tracked channels if specified
