@@ -1,5 +1,26 @@
 # Missive MCP Server
 
+> **Fork notice**: This is a fork of [Jordanlaubaugh9/missive-mcp](https://github.com/Jordanlaubaugh9/missive-mcp) with significant additions and fixes. The original project provided conversation management, task management, and basic message tools.
+>
+> **New tools added:**
+> - **User management** — list users across organisations
+> - **Analytics & reporting** — create and retrieve analytics reports with date/team/user filters
+> - **Custom team metrics** — calculate per-channel response times and volumes without requiring a higher plan tier
+> - **Drafts & sending** — create, schedule, and delete drafts; send emails/SMS directly
+> - **Posts** — create and retrieve posts for integration audit trails
+> - **Contacts** — full CRUD, contact books, contact groups, group membership management
+> - **Organisations & teams** — list orgs and teams
+> - **Shared labels** — list shared labels for conversation tagging
+> - **Claude Code support** — configuration instructions for Claude Code alongside Claude Desktop
+>
+> **API fixes** (Missive API has changed since the original project):
+> - Fixed contact groups endpoint — switched from `/contact_books/{id}/groups` to `/v1/contact_groups` with query parameters, matching current Missive API
+> - Fixed contacts API response handling — the API now returns arrays instead of objects for contacts; added handling for both formats
+> - Fixed contact update payload — API now expects `contacts` as an array with `id` included, not a plain object
+> - Fixed conversation pagination — corrected from `before` to `until` parameter for cursor-based pagination
+> - Fixed message fetch limit — Missive API max is 10 messages per request, not 50
+> - Improved rate limiting — adjusted delays to stay within Missive's 5 requests/sec burst limit
+
 Model Context Protocol (MCP) server for accessing Missive conversations in Claude Desktop and Claude Code.
 
 ## 🎯 What This Provides
@@ -56,6 +77,8 @@ Model Context Protocol (MCP) server for accessing Missive conversations in Claud
 
 ### **Team Metrics (Custom Analytics)**
 - **Calculate Team Metrics**: Generate custom analytics for any team inbox by analysing conversation and message data. Useful when native analytics filtering requires a higher plan tier.
+
+> **Looking for inspiration?** See [USE-CASES.md](USE-CASES.md) for detailed scenarios, example prompts, and multi-step workflows you can use with Claude.
 
 ### **Security & Integration**
 - **Secure Authentication**: Uses your personal Missive API token
@@ -177,6 +200,8 @@ Add these to your `env` section in the Claude Desktop/Code config:
 - "Show me support team stats for the last month"
 - "Get metrics for team xyz from 2025-06-01 to 2025-06-30 with max 1000 conversations"
 
+**⚠️ Missive API rate limits:** The Missive API allows approximately 3 requests per second (180/min). The `calculate_team_metrics` tool accounts for this with built-in delays, but large date ranges with hundreds of conversations will take time to process. For very large historical data pulls (e.g., a full year across thousands of conversations), the MCP tool may timeout — in those cases, a standalone script calling the API directly with checkpoint/resume logic is more appropriate.
+
 ## 🧪 Testing
 
 1. **Restart Claude Desktop** completely (quit and reopen)
@@ -294,26 +319,18 @@ This server implements the following MCP tools:
 
 ### **Example Usage with Claude**
 Ask Claude things like:
-- "Show me my flagged conversations"
-- "Get details for conversation ID abc123"
-- "Create a task titled 'Follow up with client' assigned to team xyz"
-- "Update task abc123 to mark it as completed"
-- "Get the full content of message def456"
-- "Search for messages with Message-ID <example@domain.com>"
-- "Show me all users in my organization"
-- "List users for organization abc123"
-- "Create an analytics report for organization xyz from 2024-01-01 to 2024-01-31"
-- "Get the analytics report results for report abc123"
-- "Show me team performance analytics for the last month"
-- "Send an email to john@example.com with subject 'Meeting tomorrow'"
-- "Create a post to close conversation abc123 and add a note"
-- "List all my contacts"
-- "Create a contact for Jane Doe with email jane@example.com in the VIPs group"
-- "Show me all contacts in the VIPs group"
-- "Add contact abc123 to the Priority Clients group"
-- "Remove John Smith from the Newsletter group"
-- "Show me all teams in my organization"
-- "List shared labels I can use"
+- "Give me a summary of what's in my inbox this morning"
+- "Show me all flagged conversations — what needs my attention?"
+- "Summarise the full history of conversation [ID] and list any action items"
+- "Draft a polite reply to this customer asking for more details, but don't send it yet"
+- "Send an email to john@example.com confirming the meeting, then close the conversation"
+- "Create a follow-up task for Friday assigned to the Sales team"
+- "Calculate our support team's average first reply time for the past 2 weeks, broken down by channel"
+- "Find all contacts in the VIPs group and list their emails"
+- "Add Jane Smith to the Priority Clients group"
+- "Post an internal note to this conversation saying the issue is resolved, add the 'Completed' label, and close it"
+
+For more detailed scenarios and multi-step workflows, see [USE-CASES.md](USE-CASES.md).
 
 ## 🤝 Contributing
 
