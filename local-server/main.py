@@ -1341,7 +1341,7 @@ async def create_draft(
     # Build draft payload
     draft_data = {
         "drafts": {
-            "account": account_id,
+            "from_field": {"address": account_id},
             "to_fields": to_fields
         }
     }
